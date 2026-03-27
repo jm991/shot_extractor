@@ -341,9 +341,25 @@ class MainWindow(QMainWindow):
         current_frame = self.slider.value()
         
         if current_frame < self.total_frames - 1:
-            self.slider.setValue(current_frame + 1)
+            # 1. Read the NEXT frame sequentially from the buffer (lightning fast!)
+            ret, frame = self.cap.read()
+            if ret:
+                # 2. Update the video preview visually
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                h, w, ch = frame.shape
+                bytes_per_line = ch * w
+                qimg = QImage(frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+                pixmap = QPixmap.fromImage(qimg).scaled(self.video_frame.size(), Qt.AspectRatioMode.KeepAspectRatio)
+                self.video_frame.setPixmap(pixmap)
+                
+                # 3. Advance the slider silently so it DOESN'T trigger the slow scrub_video() seek
+                self.slider.blockSignals(True)
+                self.slider.setValue(current_frame + 1)
+                self.slider.blockSignals(False)
+            else:
+                self.pause_playback() # Pause if we hit a bad frame
         else:
-            self.pause_playback()
+            self.pause_playback() # Pause when hitting the end of the video
 
     # --- Deletion Logic ---
     def delete_video(self):
