@@ -1,4 +1,5 @@
 import cv2
+import json
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
     QFileDialog, QListWidget, QLabel, QLineEdit, QSlider, QDoubleSpinBox, QMessageBox, 
@@ -22,7 +23,6 @@ class MainWindow(QMainWindow):
         self.total_frames = 0
         self.original_height = 1080 
 
-        # --- NEW: Playback Timer ---
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.next_frame_play)
         self.is_playing = False
@@ -41,11 +41,23 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(main_splitter)
 
         # ==========================================
-        # LEFT PANEL: Imported Videos
+        # LEFT PANEL: Imported Videos & Project Saving
         # ==========================================
         left_widget = QWidget()
         left_widget.setMinimumWidth(150)
         left_panel = QVBoxLayout(left_widget)
+        
+        # --- NEW: Save/Load Project Buttons ---
+        project_layout = QHBoxLayout()
+        self.btn_save = QPushButton("Save Project")
+        self.btn_save.clicked.connect(self.save_project)
+        self.btn_load = QPushButton("Load Project")
+        self.btn_load.clicked.connect(self.load_project)
+        project_layout.addWidget(self.btn_save)
+        project_layout.addWidget(self.btn_load)
+        left_panel.addLayout(project_layout)
+        
+        left_panel.addWidget(QLabel("")) # Spacer
         
         self.btn_import = QPushButton("Import Videos")
         self.btn_import.clicked.connect(self.import_videos)
@@ -109,7 +121,6 @@ class MainWindow(QMainWindow):
         # Slider and Nudge Buttons
         slider_layout = QHBoxLayout()
         
-        # --- NEW: Play Button ---
         self.btn_play = QPushButton("Play")
         self.btn_play.setMaximumWidth(60)
         self.btn_play.setEnabled(False)
@@ -125,8 +136,6 @@ class MainWindow(QMainWindow):
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setEnabled(False)
         self.slider.valueChanged.connect(self.scrub_video)
-        
-        # Pause video if the user clicks the slider while it's playing
         self.slider.sliderPressed.connect(self.pause_playback)
         slider_layout.addWidget(self.slider)
         
@@ -238,18 +247,84 @@ class MainWindow(QMainWindow):
         main_splitter.addWidget(right_widget)
         main_splitter.setSizes([200, 650, 250])
 
-    # --- NEW: Playback Logic ---
+    # --- NEW: Save and Load Logic ---
+    def save_project(self):
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Project", "", "JSON Files (*.json)")
+        if not file_path: return
+        
+        # Package our data into a clean dictionary
+        project_data = {
+            "videos": self.videos,
+            "shots": self.shots
+        }
+        
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                # indent=4 makes the JSON file nicely formatted and readable in a text editor
+                json.dump(project_data, f, indent=4) 
+            QMessageBox.information(self, "Success", "Project saved successfully!")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save project:\n{str(e)}")
+
+    def load_project(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Load Project", "", "JSON Files (*.json)")
+        if not file_path: return
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                project_data = json.load(f)
+            
+            # 1. Clear current workspace
+            self.pause_playback()
+            if self.cap:
+                self.cap.release()
+                self.cap = None
+            self.current_video_path = None
+            self.video_frame.setPixmap(QPixmap())
+            self.video_frame.setText("Select a video to preview")
+            self.slider.setEnabled(False)
+            self.btn_play.setEnabled(False)
+            self.btn_prev_frame.setEnabled(False)
+            self.btn_next_frame.setEnabled(False)
+            self.slider.setValue(0)
+            self.start_spin.setValue(0)
+            self.end_spin.setValue(0)
+            self.shot_name.clear()
+            
+            self.videos.clear()
+            self.shots.clear()
+            self.video_list.clear()
+            self.shot_list.clear()
+
+            # 2. Populate from loaded data
+            self.videos = project_data.get("videos", [])
+            for v in self.videos:
+                self.video_list.addItem(v.split('/')[-1])
+                
+            self.shots = project_data.get("shots", [])
+            for s in self.shots:
+                self.shot_list.addItem(f"{s['name']} [{s['start']:.2f}s-{s['end']:.2f}s]")
+            
+            self.validate_shot()
+            
+            # If we loaded videos, auto-select the first one
+            if self.videos:
+                self.video_list.setCurrentRow(0)
+                self.load_video(self.video_list.item(0))
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load project:\n{str(e)}")
+
+    # --- Playback Logic ---
     def toggle_playback(self):
         if not self.cap: return
         
         if self.is_playing:
             self.pause_playback()
         else:
-            # If we are at the end of the video, restart from beginning
             if self.slider.value() >= self.total_frames - 1:
                 self.slider.setValue(0)
                 
-            # Start timer based on video FPS (1000ms / fps)
             interval = int(1000 / self.fps) if self.fps > 0 else 33
             self.timer.start(interval)
             self.btn_play.setText("Pause")
@@ -266,10 +341,8 @@ class MainWindow(QMainWindow):
         current_frame = self.slider.value()
         
         if current_frame < self.total_frames - 1:
-            # Advance slider by 1 frame (this automatically triggers scrub_video)
             self.slider.setValue(current_frame + 1)
         else:
-            # Pause when hitting the end of the video
             self.pause_playback()
 
     # --- Deletion Logic ---
@@ -278,7 +351,7 @@ class MainWindow(QMainWindow):
         if current_row < 0: return 
         
         if self.current_video_path == self.videos[current_row]:
-            self.pause_playback() # Stop playing if deleting active video
+            self.pause_playback() 
             
             if self.cap:
                 self.cap.release()
@@ -360,7 +433,6 @@ class MainWindow(QMainWindow):
 
     # --- Keyboard Nudging ---
     def keyPressEvent(self, event):
-        # Spacebar toggles play/pause (if we aren't typing in the shot name box)
         if event.key() == Qt.Key.Key_Space and not self.shot_name.hasFocus():
             self.toggle_playback()
         elif event.key() == Qt.Key.Key_Left:
@@ -372,7 +444,7 @@ class MainWindow(QMainWindow):
 
     def step_backward(self):
         if not self.cap: return
-        self.pause_playback() # Pause if nudging manually
+        self.pause_playback() 
         
         if self.radio_start.isChecked():
             curr_frame = round(self.start_spin.value() * self.fps)
@@ -386,7 +458,7 @@ class MainWindow(QMainWindow):
 
     def step_forward(self):
         if not self.cap: return
-        self.pause_playback() # Pause if nudging manually
+        self.pause_playback() 
         
         if self.radio_start.isChecked():
             curr_frame = round(self.start_spin.value() * self.fps)
@@ -430,7 +502,7 @@ class MainWindow(QMainWindow):
         idx = self.video_list.row(item)
         self.current_video_path = self.videos[idx]
         
-        self.pause_playback() # Stop old video before loading new
+        self.pause_playback() 
         
         if self.cap: self.cap.release()
         
@@ -491,7 +563,7 @@ class MainWindow(QMainWindow):
         output_dir = QFileDialog.getExistingDirectory(self, "Select Output Directory")
         if not output_dir: return
         
-        self.pause_playback() # Safety measure: pause playback during heavy export
+        self.pause_playback()
 
         self.btn_export.setEnabled(False)
         self.btn_export.setText("Processing... Check Terminal")
