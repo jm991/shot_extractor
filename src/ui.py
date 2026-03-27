@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QListWidget, QLabel, QLineEdit, QSlider, QDoubleSpinBox, QMessageBox, 
     QComboBox, QSplitter, QButtonGroup, QRadioButton
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap
 from src.processor import process_shot
 
@@ -21,6 +21,11 @@ class MainWindow(QMainWindow):
         self.fps = 30.0
         self.total_frames = 0
         self.original_height = 1080 
+
+        # --- NEW: Playback Timer ---
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.next_frame_play)
+        self.is_playing = False
 
         self.init_ui()
 
@@ -103,6 +108,14 @@ class MainWindow(QMainWindow):
 
         # Slider and Nudge Buttons
         slider_layout = QHBoxLayout()
+        
+        # --- NEW: Play Button ---
+        self.btn_play = QPushButton("Play")
+        self.btn_play.setMaximumWidth(60)
+        self.btn_play.setEnabled(False)
+        self.btn_play.clicked.connect(self.toggle_playback)
+        slider_layout.addWidget(self.btn_play)
+
         self.btn_prev_frame = QPushButton("<")
         self.btn_prev_frame.setMaximumWidth(30)
         self.btn_prev_frame.setEnabled(False)
@@ -112,6 +125,9 @@ class MainWindow(QMainWindow):
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setEnabled(False)
         self.slider.valueChanged.connect(self.scrub_video)
+        
+        # Pause video if the user clicks the slider while it's playing
+        self.slider.sliderPressed.connect(self.pause_playback)
         slider_layout.addWidget(self.slider)
         
         self.btn_next_frame = QPushButton(">")
@@ -183,7 +199,6 @@ class MainWindow(QMainWindow):
         right_widget.setMinimumWidth(200)
         right_panel = QVBoxLayout(right_widget)
         
-        # --- SPLIT MP4 AND GIF RESOLUTION ---
         mp4_res_layout = QHBoxLayout()
         mp4_res_layout.addWidget(QLabel("MP4 Resolution:"))
         self.mp4_res_combo = QComboBox()
@@ -223,12 +238,48 @@ class MainWindow(QMainWindow):
         main_splitter.addWidget(right_widget)
         main_splitter.setSizes([200, 650, 250])
 
+    # --- NEW: Playback Logic ---
+    def toggle_playback(self):
+        if not self.cap: return
+        
+        if self.is_playing:
+            self.pause_playback()
+        else:
+            # If we are at the end of the video, restart from beginning
+            if self.slider.value() >= self.total_frames - 1:
+                self.slider.setValue(0)
+                
+            # Start timer based on video FPS (1000ms / fps)
+            interval = int(1000 / self.fps) if self.fps > 0 else 33
+            self.timer.start(interval)
+            self.btn_play.setText("Pause")
+            self.is_playing = True
+
+    def pause_playback(self):
+        if self.is_playing:
+            self.timer.stop()
+            self.btn_play.setText("Play")
+            self.is_playing = False
+
+    def next_frame_play(self):
+        if not self.cap: return
+        current_frame = self.slider.value()
+        
+        if current_frame < self.total_frames - 1:
+            # Advance slider by 1 frame (this automatically triggers scrub_video)
+            self.slider.setValue(current_frame + 1)
+        else:
+            # Pause when hitting the end of the video
+            self.pause_playback()
+
     # --- Deletion Logic ---
     def delete_video(self):
         current_row = self.video_list.currentRow()
         if current_row < 0: return 
         
         if self.current_video_path == self.videos[current_row]:
+            self.pause_playback() # Stop playing if deleting active video
+            
             if self.cap:
                 self.cap.release()
                 self.cap = None
@@ -237,6 +288,7 @@ class MainWindow(QMainWindow):
             self.video_frame.setPixmap(QPixmap())
             self.video_frame.setText("Select a video to preview")
             self.slider.setEnabled(False)
+            self.btn_play.setEnabled(False)
             self.btn_prev_frame.setEnabled(False)
             self.btn_next_frame.setEnabled(False)
             self.slider.setValue(0)
@@ -308,7 +360,10 @@ class MainWindow(QMainWindow):
 
     # --- Keyboard Nudging ---
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Left:
+        # Spacebar toggles play/pause (if we aren't typing in the shot name box)
+        if event.key() == Qt.Key.Key_Space and not self.shot_name.hasFocus():
+            self.toggle_playback()
+        elif event.key() == Qt.Key.Key_Left:
             self.step_backward()
         elif event.key() == Qt.Key.Key_Right:
             self.step_forward()
@@ -317,6 +372,8 @@ class MainWindow(QMainWindow):
 
     def step_backward(self):
         if not self.cap: return
+        self.pause_playback() # Pause if nudging manually
+        
         if self.radio_start.isChecked():
             curr_frame = round(self.start_spin.value() * self.fps)
             self.start_spin.setValue(max(0, curr_frame - 1) / self.fps)
@@ -329,6 +386,8 @@ class MainWindow(QMainWindow):
 
     def step_forward(self):
         if not self.cap: return
+        self.pause_playback() # Pause if nudging manually
+        
         if self.radio_start.isChecked():
             curr_frame = round(self.start_spin.value() * self.fps)
             self.start_spin.setValue(min(self.total_frames, curr_frame + 1) / self.fps)
@@ -346,7 +405,7 @@ class MainWindow(QMainWindow):
             self.estimate_label.setText("Est. GIF Size: 0.0 MB")
             return
             
-        res_str = self.gif_res_combo.currentText() # Estimate based on GIF res
+        res_str = self.gif_res_combo.currentText()
         height = self.original_height if res_str == "Original" else int(res_str.replace('p', ''))
         size_factor = (height / 720.0) ** 2 
         est_mb = duration * size_factor * 1.0 
@@ -370,6 +429,9 @@ class MainWindow(QMainWindow):
     def load_video(self, item):
         idx = self.video_list.row(item)
         self.current_video_path = self.videos[idx]
+        
+        self.pause_playback() # Stop old video before loading new
+        
         if self.cap: self.cap.release()
         
         self.cap = cv2.VideoCapture(self.current_video_path)
@@ -382,6 +444,7 @@ class MainWindow(QMainWindow):
         self.end_spin.setSingleStep(frame_time)
         
         self.slider.setEnabled(True)
+        self.btn_play.setEnabled(True)
         self.btn_prev_frame.setEnabled(True)
         self.btn_next_frame.setEnabled(True)
         self.slider.setRange(0, self.total_frames)
@@ -427,17 +490,18 @@ class MainWindow(QMainWindow):
         if not self.shots: return
         output_dir = QFileDialog.getExistingDirectory(self, "Select Output Directory")
         if not output_dir: return
+        
+        self.pause_playback() # Safety measure: pause playback during heavy export
 
         self.btn_export.setEnabled(False)
         self.btn_export.setText("Processing... Check Terminal")
         QApplication.processEvents() 
         
         target_size = self.size_slider.value()
-        mp4_res = self.mp4_res_combo.currentText()  # Grab MP4 Res
-        gif_res = self.gif_res_combo.currentText()  # Grab GIF Res
+        mp4_res = self.mp4_res_combo.currentText()
+        gif_res = self.gif_res_combo.currentText()
 
         for shot in self.shots:
-            # Pass both to processor
             process_shot(shot["video"], shot["start"], shot["end"], shot["name"], output_dir, target_size, mp4_res, gif_res)
             
         QMessageBox.information(self, "Success", "Export complete!")
