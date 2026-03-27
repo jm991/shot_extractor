@@ -42,7 +42,7 @@ class MainWindow(QMainWindow):
         left_widget.setMinimumWidth(150)
         left_panel = QVBoxLayout(left_widget)
         
-        self.btn_import = QPushButton("Import MKV Videos")
+        self.btn_import = QPushButton("Import Videos")
         self.btn_import.clicked.connect(self.import_videos)
         left_panel.addWidget(self.btn_import)
         

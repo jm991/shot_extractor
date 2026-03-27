@@ -36,7 +36,7 @@ def process_shot(input_video, start_time, end_time, output_name, output_dir, tar
             temp_clip = clip.resized(scale)
             
             # Using logger=None to keep terminal output clean during the loop
-            temp_clip.write_gif(gif_path, fps=fps, program='ffmpeg', logger=None)
+            temp_clip.write_gif(gif_path, fps=fps, logger=None)
             
             size_mb = os.path.getsize(gif_path) / (1024 * 1024)
             print(f"Resulting size: {size_mb:.2f} MB")
