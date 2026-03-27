@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QListWidget, QLabel, QLineEdit, QSlider, QDoubleSpinBox, QMessageBox,
     QComboBox, QSplitter, QButtonGroup, QRadioButton
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QImage, QPixmap
 from src.processor import process_shot
 
@@ -31,6 +31,9 @@ class MainWindow(QMainWindow):
         self.is_playing = False
 
         self.init_ui()
+
+        # --- NEW: Install global event filter ---
+        QApplication.instance().installEventFilter(self)
 
     def init_ui(self):
         central_widget = QWidget()
@@ -489,27 +492,39 @@ class MainWindow(QMainWindow):
         if self.radio_end.isChecked() and self.cap:
             self.slider.setValue(round(val * self.fps))
 
-# --- Keyboard & Nudging Logic ---
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Space and not self.shot_name.hasFocus():
-            self.toggle_playback()
+    # --- Global Keyboard & Nudging Logic ---
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress:
+            # Check what the user is currently focused on
+            focus_widget = QApplication.focusWidget()
+            
+            # If they are typing in a text box or adjusting a spinbox, let them use space/arrows normally
+            is_typing = isinstance(focus_widget, (QLineEdit, QDoubleSpinBox))
+            
+            if not is_typing:
+                # Intercept Spacebar
+                if event.key() == Qt.Key.Key_Space:
+                    self.toggle_playback()
+                    return True # Consume the event so it doesn't click a random button
+                    
+                # Intercept Left Arrow
+                elif event.key() == Qt.Key.Key_Left:
+                    if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                        self.skip_backward()
+                    else:
+                        self.step_backward()
+                    return True
+                    
+                # Intercept Right Arrow
+                elif event.key() == Qt.Key.Key_Right:
+                    if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                        self.skip_forward()
+                    else:
+                        self.step_forward()
+                    return True
 
-        # Left Arrow Logic
-        elif event.key() == Qt.Key.Key_Left:
-            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                self.skip_backward()  # Shift + Left = Skip 15s
-            else:
-                self.step_backward()  # Left only = Nudge 1 frame
-
-        # Right Arrow Logic
-        elif event.key() == Qt.Key.Key_Right:
-            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                self.skip_forward()   # Shift + Right = Skip 15s
-            else:
-                self.step_forward()   # Right only = Nudge 1 frame
-
-        else:
-            super().keyPressEvent(event)
+        # Let all other events process normally
+        return super().eventFilter(obj, event)
 
     def step_backward(self):
         if not self.cap: return
