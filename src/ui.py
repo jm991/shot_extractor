@@ -51,6 +51,11 @@ class MainWindow(QMainWindow):
         left_panel.addWidget(QLabel("Imported Videos:"))
         left_panel.addWidget(self.video_list)
         
+        # NEW: Delete Video Button
+        self.btn_delete_video = QPushButton("Remove Selected Video")
+        self.btn_delete_video.clicked.connect(self.delete_video)
+        left_panel.addWidget(self.btn_delete_video)
+        
         main_splitter.addWidget(left_widget)
 
         # ==========================================
@@ -61,7 +66,6 @@ class MainWindow(QMainWindow):
         center_layout = QVBoxLayout(center_widget)
         center_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Vertical Splitter for Video vs Controls
         center_splitter = QSplitter(Qt.Orientation.Vertical)
         center_layout.addWidget(center_splitter)
         
@@ -168,11 +172,7 @@ class MainWindow(QMainWindow):
         shot_controls2.addWidget(self.estimate_label)
         
         controls_layout.addLayout(shot_controls2)
-        
-        # Add the bottom controls widget to the vertical splitter
         center_splitter.addWidget(controls_widget)
-        
-        # Bias the vertical splitter to give the video frame more space
         center_splitter.setSizes([600, 150])
 
         main_splitter.addWidget(center_widget)
@@ -185,7 +185,7 @@ class MainWindow(QMainWindow):
         right_panel = QVBoxLayout(right_widget)
         
         res_layout = QHBoxLayout()
-        res_layout.addWidget(QLabel("Global Res:"))
+        res_layout.addWidget(QLabel("Export Resolution:"))
         self.res_combo = QComboBox()
         self.res_combo.addItems(["Original", "720p", "480p", "360p"])
         self.res_combo.currentTextChanged.connect(self.update_estimate)
@@ -204,15 +204,57 @@ class MainWindow(QMainWindow):
         right_panel.addWidget(QLabel("Shots to Export:"))
         right_panel.addWidget(self.shot_list)
 
+        # NEW: Delete Shot Button
+        self.btn_delete_shot = QPushButton("Remove Selected Shot")
+        self.btn_delete_shot.clicked.connect(self.delete_shot)
+        right_panel.addWidget(self.btn_delete_shot)
+
         self.btn_export = QPushButton("Export All Shots")
         self.btn_export.setStyleSheet("background-color: #2e7d32; color: white; padding: 10px; font-weight: bold;")
         self.btn_export.clicked.connect(self.export_shots)
         right_panel.addWidget(self.btn_export)
 
         main_splitter.addWidget(right_widget)
-        
-        # Set default horizontal splitter proportions
         main_splitter.setSizes([200, 650, 250])
+
+    # --- Deletion Logic ---
+    def delete_video(self):
+        current_row = self.video_list.currentRow()
+        if current_row < 0: return # No item selected
+        
+        # If the video we are deleting is currently loaded in the preview player...
+        if self.current_video_path == self.videos[current_row]:
+            if self.cap:
+                self.cap.release()
+                self.cap = None
+            self.current_video_path = None
+            
+            # Clear the UI
+            self.video_frame.setPixmap(QPixmap()) # Clears the image
+            self.video_frame.setText("Select a video to preview")
+            self.slider.setEnabled(False)
+            self.btn_prev_frame.setEnabled(False)
+            self.btn_next_frame.setEnabled(False)
+            self.slider.setValue(0)
+            self.start_spin.setValue(0)
+            self.end_spin.setValue(0)
+            self.shot_name.clear()
+            self.validate_shot()
+
+        # Remove from backend list and UI list
+        self.videos.pop(current_row)
+        self.video_list.takeItem(current_row)
+
+    def delete_shot(self):
+        current_row = self.shot_list.currentRow()
+        if current_row < 0: return # No item selected
+        
+        # Remove from backend list and UI list
+        self.shots.pop(current_row)
+        self.shot_list.takeItem(current_row)
+        
+        # Re-validate in case deleting this shot freed up a shot name you wanted to use
+        self.validate_shot()
 
     # --- Validation Logic ---
     def validate_shot(self):
@@ -314,7 +356,6 @@ class MainWindow(QMainWindow):
         files, _ = QFileDialog.getOpenFileNames(self, "Select OBS Videos", "", "Video Files (*.mkv *.mp4)")
         if not files: return
         
-        # Check if the list is currently empty before adding
         was_empty = self.video_list.count() == 0
 
         for file in files:
@@ -322,7 +363,6 @@ class MainWindow(QMainWindow):
                 self.videos.append(file)
                 self.video_list.addItem(file.split('/')[-1])
                 
-        # If this was the first import, automatically select and load the first item
         if was_empty and self.video_list.count() > 0:
             self.video_list.setCurrentRow(0)
             self.load_video(self.video_list.item(0))
