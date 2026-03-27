@@ -4,7 +4,10 @@ from src.ui import MainWindow
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setStyle("Fusion") 
+
+    # Optional: Make it look a bit more modern
+    app.setStyle("Fusion")
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

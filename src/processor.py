@@ -1,7 +1,7 @@
 import os
-from moviepy import VideoFileClip # <-- Updated import for v2.0
+from moviepy import VideoFileClip
 
-def process_shot(input_video, start_time, end_time, output_name, output_dir, target_size_mb, target_res):
+def process_shot(input_video, start_time, end_time, output_name, output_dir, target_size_mb, mp4_res, gif_res):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
@@ -9,22 +9,28 @@ def process_shot(input_video, start_time, end_time, output_name, output_dir, tar
     gif_path = os.path.join(output_dir, f"{output_name}.gif")
 
     with VideoFileClip(input_video) as video:
-        # <-- Updated method: subclip() is now subclipped()
         clip = video.subclipped(start_time, end_time)
         
-        print(f"\n--- Exporting MP4: {mp4_path} ---")
-        clip.write_videofile(mp4_path, codec="libx264", audio_codec="aac", logger=None)
-
-        print(f"\n--- Exporting GIF: {gif_path} ---")
-        print(f"Target size: {target_size_mb}MB | Requested Height: {target_res}")
-        
-        # Initial resize based on user selection
-        if target_res != "Original":
-            target_height = int(target_res.replace('p', ''))
+        # --- Handle MP4 Export ---
+        mp4_clip = clip
+        if mp4_res != "Original":
+            mp4_target_height = int(mp4_res.replace('p', ''))
             # Only downscale, don't upscale
-            if clip.size[1] > target_height:
-                # <-- Updated method: resize() is now resized()
-                clip = clip.resized(height=target_height)
+            if clip.size[1] > mp4_target_height:
+                mp4_clip = clip.resized(height=mp4_target_height)
+
+        print(f"\n--- Exporting MP4: {mp4_path} ({mp4_res}) ---")
+        mp4_clip.write_videofile(mp4_path, codec="libx264", audio_codec="aac", logger=None)
+
+        # --- Handle GIF Export ---
+        gif_clip = clip
+        print(f"\n--- Exporting GIF: {gif_path} ---")
+        print(f"Target size: {target_size_mb}MB | Requested Height: {gif_res}")
+        
+        if gif_res != "Original":
+            gif_target_height = int(gif_res.replace('p', ''))
+            if clip.size[1] > gif_target_height:
+                gif_clip = clip.resized(height=gif_target_height)
 
         fps = 15
         scale = 1.0
@@ -32,8 +38,7 @@ def process_shot(input_video, start_time, end_time, output_name, output_dir, tar
         
         while True:
             print(f"Attempt {attempt}: Scale={scale:.2f}, FPS={fps}")
-            # <-- Updated method: resize() is now resized()
-            temp_clip = clip.resized(scale)
+            temp_clip = gif_clip.resized(scale)
             
             # Using logger=None to keep terminal output clean during the loop
             temp_clip.write_gif(gif_path, fps=fps, logger=None)

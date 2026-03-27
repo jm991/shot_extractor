@@ -1,13 +1,52 @@
 import cv2
 import json
+import os
+from datetime import datetime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QFileDialog, QListWidget, QLabel, QLineEdit, QSlider, QDoubleSpinBox, QMessageBox,
     QComboBox, QSplitter, QButtonGroup, QRadioButton
 )
 from PyQt6.QtCore import Qt, QTimer, QEvent
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen
 from src.processor import process_shot
+
+# --- Custom Slider Class with Visual Handles ---
+class ShotSlider(QSlider):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.start_frame = 0
+        self.end_frame = 0
+
+    def set_shot_range(self, start, end):
+        self.start_frame = start
+        self.end_frame = end
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.maximum() <= 0:
+            return
+
+        painter = QPainter(self)
+        margin = 10
+        track_width = self.width() - (margin * 2)
+
+        start_x = margin + int((self.start_frame / self.maximum()) * track_width)
+        end_x = margin + int((self.end_frame / self.maximum()) * track_width)
+
+        if start_x < end_x:
+            painter.setBrush(QColor(46, 125, 50, 100))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(start_x, 4, end_x - start_x, self.height() - 8)
+
+        painter.setPen(QPen(QColor(0, 255, 0), 2))
+        painter.drawLine(start_x, 0, start_x, self.height())
+
+        painter.setPen(QPen(QColor(255, 0, 0), 2))
+        painter.drawLine(end_x, 0, end_x, self.height())
+        painter.end()
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -23,16 +62,15 @@ class MainWindow(QMainWindow):
         self.total_frames = 0
         self.original_height = 1080
 
-        # --- NEW: Playback Speed State ---
         self.playback_speed = 1.0
+        self.current_project_file = None
+        self.total_time_str = "00:00.000"
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.next_frame_play)
         self.is_playing = False
 
         self.init_ui()
-
-        # --- NEW: Install global event filter ---
         QApplication.instance().installEventFilter(self)
 
     def init_ui(self):
@@ -54,11 +92,19 @@ class MainWindow(QMainWindow):
         left_panel = QVBoxLayout(left_widget)
 
         project_layout = QHBoxLayout()
-        self.btn_save = QPushButton("Save Project")
+
+        self.btn_save = QPushButton("Save")
+        self.btn_save.setEnabled(False)
         self.btn_save.clicked.connect(self.save_project)
-        self.btn_load = QPushButton("Load Project")
+
+        self.btn_save_as = QPushButton("Save As")
+        self.btn_save_as.clicked.connect(self.save_project_as)
+
+        self.btn_load = QPushButton("Load")
         self.btn_load.clicked.connect(self.load_project)
+
         project_layout.addWidget(self.btn_save)
+        project_layout.addWidget(self.btn_save_as)
         project_layout.addWidget(self.btn_load)
         left_panel.addLayout(project_layout)
 
@@ -133,7 +179,6 @@ class MainWindow(QMainWindow):
         self.btn_play.clicked.connect(self.toggle_playback)
         slider_layout.addWidget(self.btn_play)
 
-        # --- NEW: Playback Speed Dropdown ---
         self.speed_combo = QComboBox()
         self.speed_combo.addItems(["0.1x", "0.25x", "0.5x", "0.75x", "1x", "1.5x", "2x", "3x", "5x"])
         self.speed_combo.setCurrentText("1x")
@@ -144,7 +189,7 @@ class MainWindow(QMainWindow):
         self.btn_skip_back = QPushButton("<<")
         self.btn_skip_back.setMaximumWidth(30)
         self.btn_skip_back.setEnabled(False)
-        self.btn_skip_back.setToolTip("Skip backward 15 seconds")
+        self.btn_skip_back.setToolTip("Skip backward 15 seconds (Shift + Left Arrow)")
         self.btn_skip_back.clicked.connect(self.skip_backward)
         slider_layout.addWidget(self.btn_skip_back)
 
@@ -155,7 +200,7 @@ class MainWindow(QMainWindow):
         self.btn_prev_frame.clicked.connect(self.step_backward)
         slider_layout.addWidget(self.btn_prev_frame)
 
-        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider = ShotSlider(Qt.Orientation.Horizontal)
         self.slider.setEnabled(False)
         self.slider.valueChanged.connect(self.scrub_video)
         self.slider.sliderPressed.connect(self.pause_playback)
@@ -171,9 +216,15 @@ class MainWindow(QMainWindow):
         self.btn_skip_forward = QPushButton(">>")
         self.btn_skip_forward.setMaximumWidth(30)
         self.btn_skip_forward.setEnabled(False)
-        self.btn_skip_forward.setToolTip("Skip forward 15 seconds")
+        self.btn_skip_forward.setToolTip("Skip forward 15 seconds (Shift + Right Arrow)")
         self.btn_skip_forward.clicked.connect(self.skip_forward)
         slider_layout.addWidget(self.btn_skip_forward)
+
+        self.time_label = QLabel("00:00.000 / 00:00.000")
+        self.time_label.setMinimumWidth(140)
+        self.time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.time_label.setStyleSheet("font-family: monospace; font-size: 11px;")
+        slider_layout.addWidget(self.time_label)
 
         controls_layout.addLayout(slider_layout)
 
@@ -263,6 +314,9 @@ class MainWindow(QMainWindow):
         right_panel.addWidget(self.size_slider)
 
         self.shot_list = QListWidget()
+        self.shot_list.itemDoubleClicked.connect(self.preview_shot)
+        self.shot_list.setToolTip("Double-click a shot to preview it")
+
         right_panel.addWidget(QLabel("Shots to Export:"))
         right_panel.addWidget(self.shot_list)
 
@@ -278,10 +332,74 @@ class MainWindow(QMainWindow):
         main_splitter.addWidget(right_widget)
         main_splitter.setSizes([200, 650, 250])
 
+    # --- Global Keyboard Event Filter ---
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress:
+            focus_widget = QApplication.focusWidget()
+            is_typing = isinstance(focus_widget, (QLineEdit, QDoubleSpinBox))
+
+            if not is_typing:
+                if event.key() == Qt.Key.Key_Space:
+                    self.toggle_playback()
+                    return True
+
+                elif event.key() == Qt.Key.Key_Left:
+                    if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                        self.skip_backward()
+                    else:
+                        self.step_backward()
+                    return True
+
+                elif event.key() == Qt.Key.Key_Right:
+                    if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                        self.skip_forward()
+                    else:
+                        self.step_forward()
+                    return True
+
+        return super().eventFilter(obj, event)
+
     # --- Save and Load Logic ---
     def save_project(self):
-        file_path, _ = QFileDialog.getSaveFileName(self, "Save Project", "", "JSON Files (*.json)")
+        if not self.current_project_file:
+            return self.save_project_as()
+
+        self._write_project_file(self.current_project_file)
+
+    def save_project_as(self):
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Project As", "", "JSON Files (*.json)")
         if not file_path: return
+
+        self.current_project_file = file_path
+        self.btn_save.setEnabled(True)
+        self._write_project_file(self.current_project_file)
+
+    def _write_project_file(self, file_path):
+        project_data = {
+            "videos": self.videos,
+            "shots": self.shots
+        }
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(project_data, f, indent=4)
+            self.setWindowTitle(f"OBS Shot Extractor - {file_path.split('/')[-1]}")
+            QMessageBox.information(self, "Success", "Project saved successfully!")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save project:\n{str(e)}")
+
+    # --- NEW: Timestamped Autosave Logic ---
+    def auto_save_project(self):
+        if not self.current_project_file:
+            return # Don't auto-save until they've manually saved once
+
+        base_dir = os.path.dirname(self.current_project_file)
+        base_name = os.path.basename(self.current_project_file)
+        name_only, ext = os.path.splitext(base_name)
+
+        # Build the suffix string: Filename_Auto_YYYY-MM-DD_HH-MM-SS.json
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        auto_filename = f"{name_only}_Auto_{timestamp}{ext}"
+        auto_path = os.path.join(base_dir, auto_filename)
 
         project_data = {
             "videos": self.videos,
@@ -289,11 +407,10 @@ class MainWindow(QMainWindow):
         }
 
         try:
-            with open(file_path, 'w', encoding='utf-8') as f:
+            with open(auto_path, 'w', encoding='utf-8') as f:
                 json.dump(project_data, f, indent=4)
-            QMessageBox.information(self, "Success", "Project saved successfully!")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save project:\n{str(e)}")
+            print(f"Autosave silently failed: {e}")
 
     def load_project(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Load Project", "", "JSON Files (*.json)")
@@ -338,12 +455,22 @@ class MainWindow(QMainWindow):
 
             self.validate_shot()
 
+            self.current_project_file = file_path
+            self.btn_save.setEnabled(True)
+            self.setWindowTitle(f"OBS Shot Extractor - {file_path.split('/')[-1]}")
+
             if self.videos:
                 self.video_list.setCurrentRow(0)
                 self.load_video(self.video_list.item(0))
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load project:\n{str(e)}")
+
+    def format_time(self, seconds):
+        m = int(seconds // 60)
+        s = int(seconds % 60)
+        ms = int((seconds % 1) * 1000)
+        return f"{m:02d}:{s:02d}.{ms:03d}"
 
     # --- Playback Logic ---
     def toggle_playback(self):
@@ -355,7 +482,6 @@ class MainWindow(QMainWindow):
             if self.slider.value() >= self.total_frames - 1:
                 self.slider.setValue(0)
 
-            # --- UPDATED: Calculate interval based on speed multiplier ---
             base_interval = 1000 / self.fps if self.fps > 0 else 33
             adjusted_interval = int(base_interval / self.playback_speed)
 
@@ -385,18 +511,19 @@ class MainWindow(QMainWindow):
 
                 self.slider.blockSignals(True)
                 self.slider.setValue(current_frame + 1)
+
+                current_time = (current_frame + 1) / self.fps if self.fps else 0
+                self.time_label.setText(f"{self.format_time(current_time)} / {self.total_time_str}")
+
                 self.slider.blockSignals(False)
             else:
                 self.pause_playback()
         else:
             self.pause_playback()
 
-    # --- NEW: Change Playback Speed ---
     def change_playback_speed(self, text):
-        # Strip the 'x' off the end and convert to a float
         self.playback_speed = float(text.replace('x', ''))
 
-        # If the video is currently playing, seamlessly update the timer speed
         if self.is_playing:
             base_interval = 1000 / self.fps if self.fps > 0 else 33
             adjusted_interval = int(base_interval / self.playback_speed)
@@ -429,10 +556,14 @@ class MainWindow(QMainWindow):
             self.start_spin.setValue(0)
             self.end_spin.setValue(0)
             self.shot_name.clear()
+            self.time_label.setText("00:00.000 / 00:00.000")
             self.validate_shot()
 
         self.videos.pop(current_row)
         self.video_list.takeItem(current_row)
+
+        # --- NEW: Run autosave ---
+        self.auto_save_project()
 
     def delete_shot(self):
         current_row = self.shot_list.currentRow()
@@ -441,6 +572,33 @@ class MainWindow(QMainWindow):
         self.shots.pop(current_row)
         self.shot_list.takeItem(current_row)
         self.validate_shot()
+
+        # --- NEW: Run autosave ---
+        self.auto_save_project()
+
+    def preview_shot(self, item):
+        idx = self.shot_list.row(item)
+        if idx < 0 or idx >= len(self.shots): return
+
+        shot = self.shots[idx]
+
+        if self.current_video_path != shot['video']:
+            try:
+                vid_idx = self.videos.index(shot['video'])
+                self.video_list.setCurrentRow(vid_idx)
+                self.load_video(self.video_list.item(vid_idx))
+            except ValueError:
+                QMessageBox.warning(self, "Error", "The original video for this shot has been removed from the workspace.")
+                return
+
+        self.start_spin.setValue(shot['start'])
+        self.end_spin.setValue(shot['end'])
+        self.shot_name.setText(shot['name'])
+
+        start_frame = round(shot['start'] * self.fps)
+        self.slider.setValue(start_frame)
+
+        self.radio_playhead.setChecked(True)
 
     # --- Validation Logic ---
     def validate_shot(self):
@@ -472,7 +630,7 @@ class MainWindow(QMainWindow):
         self.add_status_label.setText("Ready to add shot.")
         self.btn_add_shot.setEnabled(True)
 
-    # --- Syncing Trims to Video Preview ---
+    # --- Syncing Trims to Video Preview & Slider Handles ---
     def on_nudge_target_changed(self):
         if not self.cap: return
         if self.radio_start.isChecked():
@@ -483,49 +641,26 @@ class MainWindow(QMainWindow):
     def on_start_changed(self, val):
         self.update_estimate()
         self.validate_shot()
+
+        start_f = round(self.start_spin.value() * self.fps)
+        end_f = round(self.end_spin.value() * self.fps)
+        self.slider.set_shot_range(start_f, end_f)
+
         if self.radio_start.isChecked() and self.cap:
             self.slider.setValue(round(val * self.fps))
 
     def on_end_changed(self, val):
         self.update_estimate()
         self.validate_shot()
+
+        start_f = round(self.start_spin.value() * self.fps)
+        end_f = round(self.end_spin.value() * self.fps)
+        self.slider.set_shot_range(start_f, end_f)
+
         if self.radio_end.isChecked() and self.cap:
             self.slider.setValue(round(val * self.fps))
 
-    # --- Global Keyboard & Nudging Logic ---
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.KeyPress:
-            # Check what the user is currently focused on
-            focus_widget = QApplication.focusWidget()
-            
-            # If they are typing in a text box or adjusting a spinbox, let them use space/arrows normally
-            is_typing = isinstance(focus_widget, (QLineEdit, QDoubleSpinBox))
-            
-            if not is_typing:
-                # Intercept Spacebar
-                if event.key() == Qt.Key.Key_Space:
-                    self.toggle_playback()
-                    return True # Consume the event so it doesn't click a random button
-                    
-                # Intercept Left Arrow
-                elif event.key() == Qt.Key.Key_Left:
-                    if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                        self.skip_backward()
-                    else:
-                        self.step_backward()
-                    return True
-                    
-                # Intercept Right Arrow
-                elif event.key() == Qt.Key.Key_Right:
-                    if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                        self.skip_forward()
-                    else:
-                        self.step_forward()
-                    return True
-
-        # Let all other events process normally
-        return super().eventFilter(obj, event)
-
+    # --- Nudging Logic ---
     def step_backward(self):
         if not self.cap: return
         self.pause_playback()
@@ -625,6 +760,9 @@ class MainWindow(QMainWindow):
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.original_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+        total_seconds = self.total_frames / self.fps if self.fps else 0
+        self.total_time_str = self.format_time(total_seconds)
+
         frame_time = 1.0 / self.fps
         self.start_spin.setSingleStep(frame_time)
         self.end_spin.setSingleStep(frame_time)
@@ -643,12 +781,18 @@ class MainWindow(QMainWindow):
         self.speed_combo.setCurrentText("1x") # Reset speed when a new video loads
         self.shot_name.clear()
 
+        self.slider.set_shot_range(0, 0)
+
         self.radio_playhead.setChecked(True)
         self.validate_shot()
         self.scrub_video(0)
 
     def scrub_video(self, frame_number):
         if not self.cap: return
+
+        current_time = frame_number / self.fps if self.fps else 0
+        self.time_label.setText(f"{self.format_time(current_time)} / {self.total_time_str}")
+
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
         ret, frame = self.cap.read()
         if ret:
@@ -675,6 +819,9 @@ class MainWindow(QMainWindow):
 
         self.shot_name.clear()
         self.validate_shot()
+
+        # --- NEW: Run autosave ---
+        self.auto_save_project()
 
     def export_shots(self):
         if not self.shots: return
