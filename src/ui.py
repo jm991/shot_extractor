@@ -51,7 +51,6 @@ class MainWindow(QMainWindow):
         left_panel.addWidget(QLabel("Imported Videos:"))
         left_panel.addWidget(self.video_list)
         
-        # NEW: Delete Video Button
         self.btn_delete_video = QPushButton("Remove Selected Video")
         self.btn_delete_video.clicked.connect(self.delete_video)
         left_panel.addWidget(self.btn_delete_video)
@@ -184,15 +183,23 @@ class MainWindow(QMainWindow):
         right_widget.setMinimumWidth(200)
         right_panel = QVBoxLayout(right_widget)
         
-        res_layout = QHBoxLayout()
-        res_layout.addWidget(QLabel("Export Resolution:"))
-        self.res_combo = QComboBox()
-        self.res_combo.addItems(["Original", "720p", "480p", "360p"])
-        self.res_combo.currentTextChanged.connect(self.update_estimate)
-        res_layout.addWidget(self.res_combo)
-        right_panel.addLayout(res_layout)
+        # --- SPLIT MP4 AND GIF RESOLUTION ---
+        mp4_res_layout = QHBoxLayout()
+        mp4_res_layout.addWidget(QLabel("MP4 Resolution:"))
+        self.mp4_res_combo = QComboBox()
+        self.mp4_res_combo.addItems(["Original", "1080p", "720p", "480p", "360p"])
+        mp4_res_layout.addWidget(self.mp4_res_combo)
+        right_panel.addLayout(mp4_res_layout)
+
+        gif_res_layout = QHBoxLayout()
+        gif_res_layout.addWidget(QLabel("GIF Resolution:"))
+        self.gif_res_combo = QComboBox()
+        self.gif_res_combo.addItems(["Original", "720p", "480p", "360p"])
+        self.gif_res_combo.currentTextChanged.connect(self.update_estimate)
+        gif_res_layout.addWidget(self.gif_res_combo)
+        right_panel.addLayout(gif_res_layout)
         
-        self.size_label = QLabel("Hard Size Limit: 50 MB")
+        self.size_label = QLabel("GIF Size Limit: 50 MB")
         right_panel.addWidget(self.size_label)
         self.size_slider = QSlider(Qt.Orientation.Horizontal)
         self.size_slider.setRange(5, 150)
@@ -204,7 +211,6 @@ class MainWindow(QMainWindow):
         right_panel.addWidget(QLabel("Shots to Export:"))
         right_panel.addWidget(self.shot_list)
 
-        # NEW: Delete Shot Button
         self.btn_delete_shot = QPushButton("Remove Selected Shot")
         self.btn_delete_shot.clicked.connect(self.delete_shot)
         right_panel.addWidget(self.btn_delete_shot)
@@ -220,17 +226,15 @@ class MainWindow(QMainWindow):
     # --- Deletion Logic ---
     def delete_video(self):
         current_row = self.video_list.currentRow()
-        if current_row < 0: return # No item selected
+        if current_row < 0: return 
         
-        # If the video we are deleting is currently loaded in the preview player...
         if self.current_video_path == self.videos[current_row]:
             if self.cap:
                 self.cap.release()
                 self.cap = None
             self.current_video_path = None
             
-            # Clear the UI
-            self.video_frame.setPixmap(QPixmap()) # Clears the image
+            self.video_frame.setPixmap(QPixmap())
             self.video_frame.setText("Select a video to preview")
             self.slider.setEnabled(False)
             self.btn_prev_frame.setEnabled(False)
@@ -241,19 +245,15 @@ class MainWindow(QMainWindow):
             self.shot_name.clear()
             self.validate_shot()
 
-        # Remove from backend list and UI list
         self.videos.pop(current_row)
         self.video_list.takeItem(current_row)
 
     def delete_shot(self):
         current_row = self.shot_list.currentRow()
-        if current_row < 0: return # No item selected
+        if current_row < 0: return 
         
-        # Remove from backend list and UI list
         self.shots.pop(current_row)
         self.shot_list.takeItem(current_row)
-        
-        # Re-validate in case deleting this shot freed up a shot name you wanted to use
         self.validate_shot()
 
     # --- Validation Logic ---
@@ -346,7 +346,7 @@ class MainWindow(QMainWindow):
             self.estimate_label.setText("Est. GIF Size: 0.0 MB")
             return
             
-        res_str = self.res_combo.currentText()
+        res_str = self.gif_res_combo.currentText() # Estimate based on GIF res
         height = self.original_height if res_str == "Original" else int(res_str.replace('p', ''))
         size_factor = (height / 720.0) ** 2 
         est_mb = duration * size_factor * 1.0 
@@ -433,10 +433,12 @@ class MainWindow(QMainWindow):
         QApplication.processEvents() 
         
         target_size = self.size_slider.value()
-        global_res = self.res_combo.currentText() 
+        mp4_res = self.mp4_res_combo.currentText()  # Grab MP4 Res
+        gif_res = self.gif_res_combo.currentText()  # Grab GIF Res
 
         for shot in self.shots:
-            process_shot(shot["video"], shot["start"], shot["end"], shot["name"], output_dir, target_size, global_res)
+            # Pass both to processor
+            process_shot(shot["video"], shot["start"], shot["end"], shot["name"], output_dir, target_size, mp4_res, gif_res)
             
         QMessageBox.information(self, "Success", "Export complete!")
         self.btn_export.setEnabled(True)
