@@ -28,11 +28,10 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        # Remove margins so the splitter goes edge-to-edge
         main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # --- Main Splitter (Resizable Panes) ---
+        # --- Main Splitter (Horizontal) ---
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(main_splitter)
 
@@ -59,13 +58,23 @@ class MainWindow(QMainWindow):
         # ==========================================
         center_widget = QWidget()
         center_widget.setMinimumWidth(450)
-        center_panel = QVBoxLayout(center_widget)
+        center_layout = QVBoxLayout(center_widget)
+        center_layout.setContentsMargins(0, 0, 0, 0)
         
+        # Vertical Splitter for Video vs Controls
+        center_splitter = QSplitter(Qt.Orientation.Vertical)
+        center_layout.addWidget(center_splitter)
+        
+        # TOP: Video Frame
         self.video_frame = QLabel("Select a video to preview")
         self.video_frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.video_frame.setMinimumSize(640, 360)
+        self.video_frame.setMinimumSize(400, 250) 
         self.video_frame.setStyleSheet("background-color: black; color: white;")
-        center_panel.addWidget(self.video_frame)
+        center_splitter.addWidget(self.video_frame)
+
+        # BOTTOM: Editing Controls Container
+        controls_widget = QWidget()
+        controls_layout = QVBoxLayout(controls_widget)
 
         # Nudge Target Selection
         nudge_options_layout = QHBoxLayout()
@@ -87,7 +96,7 @@ class MainWindow(QMainWindow):
         nudge_options_layout.addWidget(self.radio_start)
         nudge_options_layout.addWidget(self.radio_playhead)
         nudge_options_layout.addWidget(self.radio_end)
-        center_panel.addLayout(nudge_options_layout)
+        controls_layout.addLayout(nudge_options_layout)
 
         # Slider and Nudge Buttons
         slider_layout = QHBoxLayout()
@@ -107,7 +116,7 @@ class MainWindow(QMainWindow):
         self.btn_next_frame.setEnabled(False)
         self.btn_next_frame.clicked.connect(self.step_forward)
         slider_layout.addWidget(self.btn_next_frame)
-        center_panel.addLayout(slider_layout)
+        controls_layout.addLayout(slider_layout)
 
         # Shot controls (Times)
         shot_controls1 = QHBoxLayout()
@@ -130,7 +139,7 @@ class MainWindow(QMainWindow):
 
         for w in [self.start_spin, self.btn_set_start, self.end_spin, self.btn_set_end]:
             shot_controls1.addWidget(w)
-        center_panel.addLayout(shot_controls1)
+        controls_layout.addLayout(shot_controls1)
 
         # Shot controls (Name & Submit)
         shot_controls2 = QVBoxLayout()
@@ -141,14 +150,13 @@ class MainWindow(QMainWindow):
         self.shot_name.textChanged.connect(self.validate_shot)
         
         self.btn_add_shot = QPushButton("Add Shot")
-        self.btn_add_shot.setEnabled(False) # Disabled by default
+        self.btn_add_shot.setEnabled(False)
         self.btn_add_shot.clicked.connect(self.add_shot)
         
         name_add_layout.addWidget(self.shot_name)
         name_add_layout.addWidget(self.btn_add_shot)
         shot_controls2.addLayout(name_add_layout)
         
-        # Validation Status Text
         self.add_status_label = QLabel("Load a video to begin.")
         self.add_status_label.setStyleSheet("color: gray; font-style: italic; font-size: 11px;")
         self.add_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -159,7 +167,14 @@ class MainWindow(QMainWindow):
         self.estimate_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         shot_controls2.addWidget(self.estimate_label)
         
-        center_panel.addLayout(shot_controls2)
+        controls_layout.addLayout(shot_controls2)
+        
+        # Add the bottom controls widget to the vertical splitter
+        center_splitter.addWidget(controls_widget)
+        
+        # Bias the vertical splitter to give the video frame more space
+        center_splitter.setSizes([600, 150])
+
         main_splitter.addWidget(center_widget)
 
         # ==========================================
@@ -170,7 +185,7 @@ class MainWindow(QMainWindow):
         right_panel = QVBoxLayout(right_widget)
         
         res_layout = QHBoxLayout()
-        res_layout.addWidget(QLabel("Export Resolution:"))
+        res_layout.addWidget(QLabel("Global Res:"))
         self.res_combo = QComboBox()
         self.res_combo.addItems(["Original", "720p", "480p", "360p"])
         self.res_combo.currentTextChanged.connect(self.update_estimate)
@@ -196,7 +211,7 @@ class MainWindow(QMainWindow):
 
         main_splitter.addWidget(right_widget)
         
-        # Set default splitter proportions (left, center, right)
+        # Set default horizontal splitter proportions
         main_splitter.setSizes([200, 650, 250])
 
     # --- Validation Logic ---
@@ -231,7 +246,6 @@ class MainWindow(QMainWindow):
 
     # --- Syncing Trims to Video Preview ---
     def on_nudge_target_changed(self):
-        # If user switches the radio button to Start/End, jump the playhead to that spot instantly
         if not self.cap: return
         if self.radio_start.isChecked():
             self.slider.setValue(round(self.start_spin.value() * self.fps))
@@ -241,14 +255,12 @@ class MainWindow(QMainWindow):
     def on_start_changed(self, val):
         self.update_estimate()
         self.validate_shot()
-        # If we are actively trimming the start handle, sync the video frame to it
         if self.radio_start.isChecked() and self.cap:
             self.slider.setValue(round(val * self.fps))
 
     def on_end_changed(self, val):
         self.update_estimate()
         self.validate_shot()
-        # If we are actively trimming the end handle, sync the video frame to it
         if self.radio_end.isChecked() and self.cap:
             self.slider.setValue(round(val * self.fps))
 
@@ -264,7 +276,6 @@ class MainWindow(QMainWindow):
     def step_backward(self):
         if not self.cap: return
         if self.radio_start.isChecked():
-            # Use strict frame math to prevent floating point drift
             curr_frame = round(self.start_spin.value() * self.fps)
             self.start_spin.setValue(max(0, curr_frame - 1) / self.fps)
         elif self.radio_end.isChecked():
@@ -301,10 +312,20 @@ class MainWindow(QMainWindow):
 
     def import_videos(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Select OBS Videos", "", "Video Files (*.mkv *.mp4)")
+        if not files: return
+        
+        # Check if the list is currently empty before adding
+        was_empty = self.video_list.count() == 0
+
         for file in files:
             if file not in self.videos:
                 self.videos.append(file)
                 self.video_list.addItem(file.split('/')[-1])
+                
+        # If this was the first import, automatically select and load the first item
+        if was_empty and self.video_list.count() > 0:
+            self.video_list.setCurrentRow(0)
+            self.load_video(self.video_list.item(0))
 
     def load_video(self, item):
         idx = self.video_list.row(item)
@@ -316,7 +337,6 @@ class MainWindow(QMainWindow):
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.original_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        # Calculate exactly how many seconds one frame takes, and assign it to the spinboxes
         frame_time = 1.0 / self.fps
         self.start_spin.setSingleStep(frame_time)
         self.end_spin.setSingleStep(frame_time)
@@ -361,7 +381,7 @@ class MainWindow(QMainWindow):
         self.shot_list.addItem(f"{name} [{start:.2f}s-{end:.2f}s]")
         
         self.shot_name.clear()
-        self.validate_shot() # Re-lock the button
+        self.validate_shot() 
 
     def export_shots(self):
         if not self.shots: return
